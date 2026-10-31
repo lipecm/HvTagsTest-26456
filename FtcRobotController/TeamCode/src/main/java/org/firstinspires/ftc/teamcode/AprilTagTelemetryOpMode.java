@@ -57,7 +57,8 @@ public class AprilTagTelemetryOpMode extends OpMode {
             if (detection instanceof AprilTagClusterDetection) {
                 AprilTagClusterDetection cluster = (AprilTagClusterDetection) detection;
                 telemetry.addLine(String.format(Locale.US, "==== CLUSTER %s (%d%% visible)",
-                        cluster.metadata.name, cluster.percentClusterFound));
+                        cluster.metadata == null ? "?" : cluster.metadata.name,
+                        cluster.percentClusterFound));
             } else if (detection instanceof AprilTagSingleDetection) {
                 AprilTagSingleDetection single = (AprilTagSingleDetection) detection;
                 if (single.metadata != null) {
@@ -68,7 +69,12 @@ public class AprilTagTelemetryOpMode extends OpMode {
                 }
             }
 
-            // Pose is on the shared superclass, so it reads the same either way.
+            // Pose is on the shared superclass, so it reads the same either way - and it can be
+            // null when the SDK could not solve it, which must not take the OpMode down.
+            if (detection.ftcPose == null) {
+                telemetry.addLine("no pose for this tag (poseless detection)");
+                continue;
+            }
             telemetry.addLine(String.format(Locale.US, "XYZ %6.1f %6.1f %6.1f  (inch)",
                     detection.ftcPose.x, detection.ftcPose.y, detection.ftcPose.z));
             telemetry.addLine(String.format(Locale.US, "PRY %6.1f %6.1f %6.1f  (deg)",

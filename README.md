@@ -120,6 +120,8 @@ Only one process can own a port, so stop the desktop simulator before running th
 - **`no scorable target`** - the target card says why: it names the closest tag and the rule that rejected it (alliance, roll, cluster %, decision margin). Set `alliance` to `ANY` to see everything.
 - **`BindException: Address already in use`** - every port the dashboard tries is busy. On a Control Hub 8080 is OnBot Java and that is expected, so the OpMode simply takes 8082; trust the telemetry line for the real URL. If it reports that no port was free, close whatever holds 8080-8089.
 - **`camera 'Webcam 1' not found`** - the Driver Station camera name is different. Type the right name on the dashboard.
+- **The OpMode stopped the moment a tag came into view** - an old bug: a detection the SDK could not localise carries no pose, and the state builder read it anyway. A poseless tag is now served with `"hasPose":false` and shows `no pose` in the Detections table. Update `AprilTagDashboardOpMode.java` if you still see it.
+- **The OpMode ends on its own, whatever the cause** - as of this version a loop exception cannot end the run: the OpMode keeps ticking and the `OpMode error` card at the top of the page prints the exception. Paste that text into an issue.
 - **Limelight shows nothing** - check the device name matches the Driver Station, and that the Limelight is on a pipeline with tags (`pipe_fiducial`). The dashboard prints the pipeline it is actually running.
 - **Push tag size refused** - the message names the keys it found and the value it read. Paste it into an issue and it can usually be supported in one line.
 - **Poses jitter** - lower exposure, try another pose solver, or raise decimation while keeping the smallest value that still sees the tags.

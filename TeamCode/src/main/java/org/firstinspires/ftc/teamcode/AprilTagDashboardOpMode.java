@@ -100,11 +100,25 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
 
     @Override
     public void init_loop() {
-        latestState = buildStateJson();
+        try {
+            latestState = buildStateJson();
+        } catch (Exception e) {
+            lastError = "state: " + e;
+        }
     }
 
     @Override
     public void loop() {
+        try {
+            loopOnce();
+        } catch (Exception e) {
+            // A webcam that dies mid-stream, or a control it refuses, must not end the run:
+            // the match keeps going with the reason on telemetry and on the dashboard.
+            lastError = "loop: " + e;
+        }
+    }
+
+    private void loopOnce() {
         long now = System.nanoTime();
         if (lastLoopNanos != 0) {
             loopMs = (now - lastLoopNanos) / 1_000_000;
@@ -128,14 +142,7 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
             pendingCameraApply = false;
         }
 
-        if (config.isLimelight()) {
-            lastLLResult = limelight == null ? null : limelight.getLatestResult();
-            latestDetections = LimelightBridge.toDetections(lastLLResult, config);
-        } else {
-            lastLLResult = null;
-            latestDetections = aprilTag == null
-                    ? java.util.Collections.emptyList() : aprilTag.getDetections();
-        }
+        latestDetections = fetchDetections();
         latestState = buildStateJson();
 
         AprilTagDetection target = AprilTagTargeting.bestTarget(latestDetections, config);
@@ -159,6 +166,25 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         }
         if (!llSync.isEmpty()) {
             telemetry.addLine("push tag size: " + llSync);
+        }
+    }
+
+    /**
+     * The one call that touches the camera stack every loop. A USB webcam pulling out mid-match
+     * throws from here, so the failure is recorded and the dashboard keeps being served.
+     */
+    private List<AprilTagDetection> fetchDetections() {
+        try {
+            if (config.isLimelight()) {
+                lastLLResult = limelight == null ? null : limelight.getLatestResult();
+                return LimelightBridge.toDetections(lastLLResult, config);
+            }
+            lastLLResult = null;
+            return aprilTag == null
+                    ? java.util.Collections.emptyList() : aprilTag.getDetections();
+        } catch (Exception e) {
+            lastError = "camera: " + e;
+            return java.util.Collections.emptyList();
         }
     }
 
@@ -514,33 +540,54 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         if (portal == null) {
             return;
         }
-        if (config.exposureUs != lastExposureApplied) {
-            ExposureControl exposure = portal.getCameraControl(ExposureControl.class);
-            if (exposure != null && exposure.isExposureSupported()) {
-                if (config.exposureUs <= 0) {
-                    if (exposure.isModeSupported(ExposureControl.Mode.Auto)) {
-                        exposure.setMode(ExposureControl.Mode.Auto);
-                    }
-                } else if (exposure.isModeSupported(ExposureControl.Mode.Manual)) {
-                    exposure.setMode(ExposureControl.Mode.Manual);
-                    long minUs = exposure.getMinExposure(TimeUnit.MICROSECONDS);
-                    long maxUs = exposure.getMaxExposure(TimeUnit.MICROSECONDS);
-                    exposure.setExposure(Math.max(minUs, Math.min(maxUs, config.exposureUs)),
-                            TimeUnit.MICROSECONDS);
-                }
-            }
+        try {
+            applyExposure();
+        } catch (Exception e) {
+            // A webcam whose driver refuses this mode must not end the match.
+            lastError = "exposure: " + e;
             lastExposureApplied = config.exposureUs;
         }
-        if (config.gain != lastGainApplied) {
-            if (config.gain < 0) {
-                lastGainApplied = config.gain; // "leave alone" - nothing to push
-            } else {
-                GainControl gain = portal.getCameraControl(GainControl.class);
-                if (gain != null) {
-                    gain.setGain(Math.max(gain.getMinGain(), Math.min(gain.getMaxGain(), config.gain)));
-                    lastGainApplied = config.gain;
+        try {
+            applyGain();
+        } catch (Exception e) {
+            lastError = "gain: " + e;
+            lastGainApplied = config.gain;
+        }
+    }
+
+    private void applyExposure() {
+        if (config.exposureUs == lastExposureApplied) {
+            return;
+        }
+        ExposureControl exposure = portal.getCameraControl(ExposureControl.class);
+        if (exposure != null && exposure.isExposureSupported()) {
+            if (config.exposureUs <= 0) {
+                if (exposure.isModeSupported(ExposureControl.Mode.Auto)) {
+                    exposure.setMode(ExposureControl.Mode.Auto);
                 }
+            } else if (exposure.isModeSupported(ExposureControl.Mode.Manual)) {
+                exposure.setMode(ExposureControl.Mode.Manual);
+                long minUs = exposure.getMinExposure(TimeUnit.MICROSECONDS);
+                long maxUs = exposure.getMaxExposure(TimeUnit.MICROSECONDS);
+                exposure.setExposure(Math.max(minUs, Math.min(maxUs, config.exposureUs)),
+                        TimeUnit.MICROSECONDS);
             }
+        }
+        lastExposureApplied = config.exposureUs;
+    }
+
+    private void applyGain() {
+        if (config.gain == lastGainApplied) {
+            return;
+        }
+        if (config.gain < 0) {
+            lastGainApplied = config.gain; // "leave alone" - nothing to push
+            return;
+        }
+        GainControl gain = portal.getCameraControl(GainControl.class);
+        if (gain != null) {
+            gain.setGain(Math.max(gain.getMinGain(), Math.min(gain.getMaxGain(), config.gain)));
+            lastGainApplied = config.gain;
         }
     }
 
@@ -584,20 +631,32 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         // The "push tag size" button's outcome, and the pipeline the device is running.
         AprilTagConfig.field(sb, "llSync", llSync).append(',');
         AprilTagConfig.field(sb, "llPipe", llPipeText()).append(',');
+        // Whatever last stopped a loop: shown on the dashboard so it can be read out loud.
+        AprilTagConfig.field(sb, "error", lastError).append(',');
 
         // Live camera control ranges so the dashboard sliders can adapt to the webcam.
+        // These are a convenience for the sliders: a webcam that will not answer must not
+        // cost the match, so each probe is guarded on its own.
         long expMin = 0, expMax = 0;
         int gainMin = 0, gainMax = 0;
         if (portal != null && portal.getCameraState() == VisionPortal.CameraState.STREAMING) {
-            ExposureControl exposure = portal.getCameraControl(ExposureControl.class);
-            if (exposure != null && exposure.isExposureSupported()) {
-                expMin = exposure.getMinExposure(TimeUnit.MICROSECONDS);
-                expMax = exposure.getMaxExposure(TimeUnit.MICROSECONDS);
+            try {
+                ExposureControl exposure = portal.getCameraControl(ExposureControl.class);
+                if (exposure != null && exposure.isExposureSupported()) {
+                    expMin = exposure.getMinExposure(TimeUnit.MICROSECONDS);
+                    expMax = exposure.getMaxExposure(TimeUnit.MICROSECONDS);
+                }
+            } catch (Exception ignored) {
+                // Sliders keep their defaults.
             }
-            GainControl gain = portal.getCameraControl(GainControl.class);
-            if (gain != null) {
-                gainMin = gain.getMinGain();
-                gainMax = gain.getMaxGain();
+            try {
+                GainControl gain = portal.getCameraControl(GainControl.class);
+                if (gain != null) {
+                    gainMin = gain.getMinGain();
+                    gainMax = gain.getMaxGain();
+                }
+            } catch (Exception ignored) {
+                // Sliders keep their defaults.
             }
         }
         AprilTagConfig.field(sb, "expMinUs", (double) expMin).append(',');
@@ -624,7 +683,9 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         // selection would hide exactly the case this reads out.
         AprilTagDetection nearest = null;
         for (AprilTagDetection d : latestDetections) {
-            if (nearest == null || d.ftcPose.range < nearest.ftcPose.range) {
+            // A detection with no solved pose cannot be the nearest cell; skip it, do not throw.
+            if (d.ftcPose != null
+                    && (nearest == null || d.ftcPose.range < nearest.ftcPose.range)) {
                 nearest = d;
             }
         }
@@ -694,15 +755,19 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         AprilTagConfig.field(sb, "percent", (double) percent).append(',');
         AprilTagConfig.field(sb, "margin", (double) margin, 1).append(',');
         AprilTagConfig.field(sb, "hamming", (double) hamming).append(',');
-        AprilTagConfig.field(sb, "range", d.ftcPose.range, 1).append(',');
-        AprilTagConfig.field(sb, "bearing", d.ftcPose.bearing, 1).append(',');
-        AprilTagConfig.field(sb, "elevation", d.ftcPose.elevation, 1).append(',');
-        AprilTagConfig.field(sb, "x", d.ftcPose.x, 1).append(',');
-        AprilTagConfig.field(sb, "y", d.ftcPose.y, 1).append(',');
-        AprilTagConfig.field(sb, "z", d.ftcPose.z, 1).append(',');
-        AprilTagConfig.field(sb, "pitch", d.ftcPose.pitch, 1).append(',');
-        AprilTagConfig.field(sb, "roll", d.ftcPose.roll, 1).append(',');
-        AprilTagConfig.field(sb, "yaw", d.ftcPose.yaw, 1);
+        // A detection can turn up with no solved pose (no pose solver, a failed solve, a tag
+        // the SDK could not localise). Sending nulls keeps the tag on the dashboard instead
+        // of throwing a NullPointerException out of the state builder.
+        AprilTagConfig.field(sb, "hasPose", d.ftcPose != null).append(',');
+        AprilTagConfig.field(sb, "range", d.ftcPose == null ? Double.NaN : d.ftcPose.range, 1).append(',');
+        AprilTagConfig.field(sb, "bearing", d.ftcPose == null ? Double.NaN : d.ftcPose.bearing, 1).append(',');
+        AprilTagConfig.field(sb, "elevation", d.ftcPose == null ? Double.NaN : d.ftcPose.elevation, 1).append(',');
+        AprilTagConfig.field(sb, "x", d.ftcPose == null ? Double.NaN : d.ftcPose.x, 1).append(',');
+        AprilTagConfig.field(sb, "y", d.ftcPose == null ? Double.NaN : d.ftcPose.y, 1).append(',');
+        AprilTagConfig.field(sb, "z", d.ftcPose == null ? Double.NaN : d.ftcPose.z, 1).append(',');
+        AprilTagConfig.field(sb, "pitch", d.ftcPose == null ? Double.NaN : d.ftcPose.pitch, 1).append(',');
+        AprilTagConfig.field(sb, "roll", d.ftcPose == null ? Double.NaN : d.ftcPose.roll, 1).append(',');
+        AprilTagConfig.field(sb, "yaw", d.ftcPose == null ? Double.NaN : d.ftcPose.yaw, 1);
         sb.append('}');
     }
 
@@ -711,13 +776,16 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
             AprilTagClusterDetection c = (AprilTagClusterDetection) d;
             return String.format(Locale.US, "cluster %s  %d%% visible  roll %.0f deg  range %.1f in",
                     c.metadata == null ? "?" : c.metadata.name,
-                    c.percentClusterFound, c.ftcPose.roll, c.ftcPose.range);
+                    c.percentClusterFound,
+                    c.ftcPose == null ? Double.NaN : c.ftcPose.roll,
+                    c.ftcPose == null ? Double.NaN : c.ftcPose.range);
         }
         if (d instanceof AprilTagSingleDetection) {
             AprilTagSingleDetection s = (AprilTagSingleDetection) d;
             return String.format(Locale.US, "single ID %d (%s)  margin %.0f  range %.1f in",
                     s.id, s.metadata == null ? "no metadata" : s.metadata.name,
-                    s.decisionMargin, s.ftcPose.range);
+                    s.decisionMargin,
+                    s.ftcPose == null ? Double.NaN : s.ftcPose.range);
         }
         return "unknown detection type";
     }
