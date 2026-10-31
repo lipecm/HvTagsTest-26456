@@ -160,6 +160,41 @@ class AprilTagTargetingTest {
     }
 
     @Test
+    void theNoTargetReasonNamesTheRuleThatRejectedTheClosestTag() {
+        AprilTagConfig config = new AprilTagConfig();
+
+        assertEquals("no tags in view",
+                AprilTagTargeting.noTargetReason(Collections.emptyList(), config));
+        assertEquals("no tags in view", AprilTagTargeting.noTargetReason(null, config));
+
+        String upsideDown = AprilTagTargeting.noTargetReason(
+                Collections.singletonList(single(3, "R_HIVE", 95f, 160.0, 12.0)), config);
+        assertTrue(upsideDown.contains("R_HIVE"), "the tag is named: " + upsideDown);
+        assertTrue(upsideDown.contains("upside down"), "the roll rule is blamed: " + upsideDown);
+
+        String wrongAlliance = AprilTagTargeting.noTargetReason(
+                Collections.singletonList(single(2, "B_HIVE", 95f, 0.0, 18.0)), config);
+        assertTrue(wrongAlliance.contains("B_HIVE"), "the tag is named: " + wrongAlliance);
+        assertTrue(wrongAlliance.contains("blue"),
+                "a BLUE name under RED reads as blue: " + wrongAlliance);
+
+        config.applyJson("{\"minDecisionMargin\":50}");
+        String weak = AprilTagTargeting.noTargetReason(
+                Collections.singletonList(single(1, "HIVE", 20f, 0.0, 30.0)), config);
+        assertTrue(weak.contains("margin"), "the margin floor is blamed: " + weak);
+
+        config.applyJson("{\"minDecisionMargin\":0,\"minClusterPercent\":80}");
+        String thin = AprilTagTargeting.noTargetReason(
+                Collections.singletonList(cluster(40, "R_CLUSTER", 0.0, 30.0)), config);
+        assertTrue(thin.contains("40%"), "the share that was visible is quoted: " + thin);
+
+        // The nearest detection is the one explained: that is what the driver is looking at.
+        String nearest = AprilTagTargeting.noTargetReason(Arrays.asList(
+                single(3, "R_HIVE", 95f, 160.0, 60.0), single(2, "B_HIVE", 95f, 0.0, 18.0)), config);
+        assertTrue(nearest.contains("B_HIVE"), "the closest tag is the one explained: " + nearest);
+    }
+
+    @Test
     void namesWithoutAnAlliancePrefixAreNeverFiltered() {
         assertTrue(AprilTagTargeting.allianceOk(null, "RED"));
         assertTrue(AprilTagTargeting.allianceOk("", "RED"));

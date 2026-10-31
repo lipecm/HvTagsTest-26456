@@ -41,10 +41,14 @@ If the name is different, type it in the **camera name** box and the stream rebu
 
 ### Open the dashboard
 
+The OpMode prints its address on the Driver Station telemetry when it starts. It asks for 8080 and moves to the next free port (8082 and up) if that is taken - on a Control Hub it always is, because the Robot Controller app serves OnBot Java on 8080.
+
 | Situation | URL |
 |---|---|
-| Laptop on the robot's network | `http://<robot-ip>:8080` (the IP is on telemetry) |
-| Control Hub over USB | `adb reverse tcp:8080 tcp:8080`, then open `http://localhost:8080` |
+| Laptop on the robot's network | the `Dashboard:` line on telemetry, e.g. `http://192.168.43.1:8082` |
+| Control Hub over USB | `adb reverse tcp:8082 tcp:8082` (the port from that line), then open `http://localhost:8082` |
+
+The desktop simulator prints the same line and normally gets 8080.
 
 ### Desktop simulator
 
@@ -102,17 +106,19 @@ To use it in your own robot project, copy the six `.java` files from either `Tea
 
 | Port | What |
 |---|---|
-| 8080 | The dashboard |
+| 8080, then 8082-8089 | The dashboard. It takes the first free port, so a Control Hub ends up on 8082 or later |
 | 8081 | Detections posted by `webcam_tags.py` |
 | 8090 | MJPEG preview from the simulator's webcam script |
 | 5801 | The Limelight's own web page, linked from the dashboard |
 | 5807 | The Limelight's REST API, used by push tag size |
 
-Only one process can own 8080, so stop the desktop simulator before running the tests.
+Only one process can own a port, so stop the desktop simulator before running the tests.
 
 ## Troubleshooting
 
-- **Page won't open** - the laptop and robot must be on the same network; over USB use the `adb reverse` line above. Port 8080 must not be blocked on the hub.
+- **Page won't open** - the laptop and robot must be on the same network, and use the port from the telemetry line, not always 8080. Over USB the `adb reverse` line has to match that port too.
+- **`no scorable target`** - the target card says why: it names the closest tag and the rule that rejected it (alliance, roll, cluster %, decision margin). Set `alliance` to `ANY` to see everything.
+- **`BindException: Address already in use`** - every port the dashboard tries is busy. On a Control Hub 8080 is OnBot Java and that is expected, so the OpMode simply takes 8082; trust the telemetry line for the real URL. If it reports that no port was free, close whatever holds 8080-8089.
 - **`camera 'Webcam 1' not found`** - the Driver Station camera name is different. Type the right name on the dashboard.
 - **Limelight shows nothing** - check the device name matches the Driver Station, and that the Limelight is on a pipeline with tags (`pipe_fiducial`). The dashboard prints the pipeline it is actually running.
 - **Push tag size refused** - the message names the keys it found and the value it read. Paste it into an issue and it can usually be supported in one line.

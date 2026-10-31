@@ -85,8 +85,13 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
 
         try {
             server = new AprilTagDashboardServer(this);
-            telemetry.addLine("Dashboard: http://" + AprilTagDashboardServer.firstLanIp()
-                    + ":" + AprilTagDashboardServer.PORT);
+            String where = "Dashboard: http://" + AprilTagDashboardServer.firstLanIp()
+                    + ":" + server.port();
+            if (server.port() != AprilTagDashboardServer.PORT) {
+                where += "  (port " + AprilTagDashboardServer.PORT + " was taken - on a Control Hub"
+                        + " that is OnBot Java)";
+            }
+            telemetry.addLine(where);
         } catch (IOException e) {
             lastError = "dashboard server failed: " + e;
             telemetry.addLine(lastError);
@@ -143,7 +148,8 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
             telemetry.addData("range (in)", String.format(Locale.US, "%.1f", target.ftcPose.range));
             telemetry.addData("bearing (deg)", String.format(Locale.US, "%.1f", target.ftcPose.bearing));
         } else {
-            telemetry.addLine("no scorable target");
+            telemetry.addLine("no scorable target - "
+                    + AprilTagTargeting.noTargetReason(latestDetections, config));
         }
         for (AprilTagDetection d : latestDetections) {
             telemetry.addLine((AprilTagTargeting.isScorable(d, config) ? "[ok] " : "[  ] ") + describe(d));
@@ -609,6 +615,9 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
             appendDetection(sb, target);
             sb.append(',');
         }
+        AprilTagConfig.field(sb, "targetWhy",
+                target == null ? AprilTagTargeting.noTargetReason(latestDetections, config) : "")
+                .append(',');
 
         // BIOBUZZ hive-cell tip check (see AprilTagConfig.isTipped). Uses the NEAREST cell
         // by any means - a tipped cell is the one whose tags go unscorable, so scorable-only

@@ -40,17 +40,20 @@ public class AprilTagDashboardServer {
     }
 
     public static final int PORT = 8080;
+    /** Where the dashboard moves when {@link #PORT} is taken - on a Control Hub it always is:
+     *  the Robot Controller app serves OnBot Java and Blocks on 192.168.43.1:8080. */
+    private static final int[] ALT_PORTS = {8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089};
 
     private final Backend backend;
     private final ServerSocket serverSocket;
+    private final int port;
     private final ExecutorService pool;
     private volatile boolean running = true;
 
     public AprilTagDashboardServer(Backend backend) throws IOException {
         this.backend = backend;
-        this.serverSocket = new ServerSocket();
-        serverSocket.setReuseAddress(true);
-        serverSocket.bind(new InetSocketAddress(PORT));
+        this.serverSocket = bind();
+        this.port = serverSocket.getLocalPort();
         this.pool = Executors.newCachedThreadPool();
         pool.execute(new Runnable() {
             @Override
@@ -72,6 +75,35 @@ public class AprilTagDashboardServer {
                 }
             }
         });
+    }
+
+    /** The port the dashboard actually ended up on; not {@link #PORT} when 8080 was busy. */
+    public int port() {
+        return port;
+    }
+
+    /** Binds the first free port, so a Control Hub - where the RC app already owns 8080 - still
+     *  gets a dashboard, just at 8082 or later. */
+    private static ServerSocket bind() throws IOException {
+        IOException last = null;
+        for (int i = -1; i < ALT_PORTS.length; i++) {
+            int candidate = i < 0 ? PORT : ALT_PORTS[i];
+            ServerSocket socket = new ServerSocket();
+            socket.setReuseAddress(true);
+            try {
+                socket.bind(new InetSocketAddress(candidate));
+                return socket;
+            } catch (IOException e) {
+                last = e;
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                    // nothing was bound, nothing to release
+                }
+            }
+        }
+        throw new IOException("no free port for the dashboard (" + PORT + ", then "
+                + ALT_PORTS[0] + "-" + ALT_PORTS[ALT_PORTS.length - 1] + " are all in use)", last);
     }
 
     private void handle(Socket sock) {
@@ -497,8 +529,8 @@ public class AprilTagDashboardServer {
             "  $('tSub').textContent=(s.target.kind||'single')+'  ·  '",
             "   +(s.target.scorable?'scorable':'not scorable')+'  ·  '",
             "   +((s.target.kind||'single')==='cluster'?fmt(s.target.percent,0)+'% visible':'margin '+fmt(s.target.margin,0));",
-            "  $('targetCard').classList.add('has');}else{$('tName').textContent='none in view';",
-            "  $('tDist').textContent='';$('tSub').textContent='-';$('targetCard').classList.remove('has');}",
+            "  $('targetCard').classList.add('has');}else{$('tName').textContent='none scorable';",
+            "  $('tDist').textContent='';$('tSub').textContent=s.targetWhy||'-';$('targetCard').classList.remove('has');}",
             " const ds=(s.detections||[]).filter(d=>s.config&&s.config.showUnscorable||d.scorable);",
             " $('dets').innerHTML=ds.length?ds.map(detRow).join('')",
             "  :'<tr><td colspan=\"4\" style=\"text-align:center;color:var(--dim);padding:24px\">No AprilTags in view</td></tr>';",

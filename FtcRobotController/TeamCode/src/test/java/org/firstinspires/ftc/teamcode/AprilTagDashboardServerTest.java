@@ -24,8 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code POST /api/config} reaches the backend on the OpMode's thread, {@code GET /api/state}
  * returns what the backend last published, and {@code close()} really gives the port back.
  *
- * <p>The server binds one fixed port (8080 - the robot address the README prints), so this
- * class is skipped, loudly, if something else already holds it.
+ * <p>The server prefers port 8080 but moves to 8082+ when 8080 is taken - on a Control Hub the
+ * Robot Controller app serves OnBot Java there - so these tests are skipped, loudly, if that
+ * whole range is held by something else.
  */
 class AprilTagDashboardServerTest {
 
@@ -112,6 +113,20 @@ class AprilTagDashboardServerTest {
         int code = conn.getResponseCode();
         conn.disconnect();
         return code;
+    }
+
+    @Test
+    void aSecondDashboardMovesToTheNextFreePort() throws IOException {
+        AprilTagDashboardServer second = new AprilTagDashboardServer(backend);
+        try {
+            assertTrue(server.port() != second.port(),
+                    "the first dashboard holds 8080, so the second must move: "
+                            + server.port() + " vs " + second.port());
+            assertEquals(AprilTagDashboardServer.PORT + 2, second.port(),
+                    "8081 belongs to the detection ingest, so the next free port is 8082");
+        } finally {
+            second.close();
+        }
     }
 
     @Test

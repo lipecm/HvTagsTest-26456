@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 /**
  * Desktop "robot simulator" for the AprilTag dashboard - runs on the pit laptop, no robot
@@ -54,7 +55,7 @@ public class DesktopSimMain {
         });
 
         System.out.println("AprilTag desktop simulator");
-        System.out.println("  dashboard:  http://localhost:" + DASHBOARD_PORT);
+        System.out.println("  dashboard:  http://localhost:" + server.port());
         System.out.println("  ingest:     http://localhost:" + INGEST_PORT + "/sim/detections");
         System.out.println("  webcam:     python desktop-sim/webcam_tags.py   (laptop camera = robot camera)");
         System.out.println("  stopping:   Ctrl+C");
@@ -164,6 +165,8 @@ public class DesktopSimMain {
         }
 
         sb.append("\"target\":").append(target == null ? "null" : target.toString()).append(',');
+        AprilTagConfig.field(sb, "targetWhy",
+                target == null ? noTargetWhy(dets, nearest) : "").append(',');
         // BIOBUZZ hive-cell tip check: the cluster rides the underside of the cell, so its
         // pitch tracks the cell. Compare against the calibrated upright baseline.
         double hivePitch = Double.NaN;
@@ -184,6 +187,51 @@ public class DesktopSimMain {
         sb.append("\"detections\":").append(shown.toString());
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * The dashboard's "why is there no target" line, worded exactly as AprilTagTargeting's, so
+     * the simulator explains itself the same way the robot does.
+     */
+    private static String noTargetWhy(JSONArray dets, JSONObject nearest) {
+        if (dets == null || dets.length() == 0 || nearest == null) {
+            return "no tags in view";
+        }
+        String name = nearest.optString("name", "");
+        if (name.isEmpty() || "null".equals(name)) {
+            name = "tag " + nearest.optInt("id", -1);
+        }
+        double roll = nearest.optDouble("roll", 0);
+        if (Math.abs(roll) > config.maxRollDeg) {
+            return String.format(Locale.US, "%s: roll %.0f deg is past the %.0f deg limit - "
+                    + "the cell looks upside down", name, roll, config.maxRollDeg);
+        }
+        if ("cluster".equals(nearest.optString("kind", "single"))) {
+            int percent = nearest.optInt("percent", 100);
+            if (percent < config.minClusterPercent) {
+                return String.format(Locale.US, "%s: %d%% of the cluster visible, min is %d%%",
+                        name, percent, config.minClusterPercent);
+            }
+            if (!allianceOk(name)) {
+                return name + ": " + allianceMismatch(name);
+            }
+        } else {
+            double margin = nearest.optDouble("margin", 100);
+            if (margin < config.minDecisionMargin) {
+                return String.format(Locale.US, "%s: decision margin %.0f, min is %.0f",
+                        name, margin, config.minDecisionMargin);
+            }
+            if (!allianceOk(name)) {
+                return name + ": " + allianceMismatch(name);
+            }
+        }
+        return name + ": nothing scorable, and no rule explains it - report this";
+    }
+
+    private static String allianceMismatch(String name) {
+        char hint = Character.toUpperCase(name.charAt(0));
+        return config.alliance.toLowerCase(Locale.US) + " alliance filter, this one is "
+                + (hint == 'R' ? "red" : "blue");
     }
 
     /** Same two rules as AprilTagTargeting, applied to the sim's simple JSON detections. */
