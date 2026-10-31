@@ -1,0 +1,23 @@
+# Gradle / Android build output
+build/
+.gradle/
+.kotlin/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Desktop simulator
+desktop-sim/libs/
+desktop-sim/bin/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,123 @@
+# Hive Tags
+
+AprilTag detection for FTC that works with the camera you already have. One live dashboard for tuning, single tags and clusters, and a desktop simulator so you can try it without a robot. Built and tested by students and teams in the community.
+
+| Camera | How it works | Pick it if | Setup |
+|---|---|---|---|
+| Limelight 3A | The camera detects tags on its own processor; the robot reads the result | You already run a Limelight and want its pose output | [Limelight](#limelight-3a) |
+| USB webcam | Detection runs on the Control Hub through the FTC SDK, no coprocessor | You want to start today with hardware you have | [USB webcam](#usb-webcam) |
+| No robot at all | The desktop simulator serves the same dashboard from your laptop | You want to see it work before touching hardware | [Simulator](#desktop-simulator) |
+
+Have both cameras? Start with the Limelight.
+
+## What you get
+
+- Single tags and AprilTag clusters with range, bearing, elevation and roll
+- The best scorable target highlighted, using the alliance and roll rules from the [FTC AprilTag Clusters tech tip](https://ftc-docs.firstinspires.org/en/latest/tech_tips/tech-tips/tech-tip-apriltag-clusters/tech-tip-apriltag-clusters.html)
+- A tuning dashboard on port 8080: change a slider, watch the result, nothing redeployed
+- **Push tag size to the Limelight**: writes your tag size into the camera's own pipeline over its REST API
+- A smoke-test OpMode that prints detections to telemetry and nothing else
+
+## Quick start
+
+Clone the repo, then open `FtcRobotController/` in Android Studio and let Gradle sync finish.
+
+### Limelight 3A
+
+1. Name the Limelight `limelight` on the Driver Station (or type the real name on the dashboard).
+2. Run the **AprilTag Dashboard** OpMode.
+3. On the dashboard, set **source** to `LIMELIGHT`.
+
+Point the camera at tags. If your Limelight is not at `limelight.local`, type its host or IP in the **host** box and the page and the REST calls both follow it.
+
+Set your tag size once: drag the **tag size** slider, then press **push tag size to Limelight**. The dashboard shows the active pipeline and what the camera answered, for example `pipeline 0: tagSize 152.4 mm - uploaded`. If the pipeline file has no size key the camera understands, nothing is written and the message says what it found instead.
+
+### USB webcam
+
+1. Plug the webcam into the Control Hub and name it `Webcam 1` in the Driver Station.
+2. Run the **AprilTag Dashboard** OpMode with **source** set to `WEBCAM`.
+
+If the name is different, type it in the **camera name** box and the stream rebuilds.
+
+### Open the dashboard
+
+| Situation | URL |
+|---|---|
+| Laptop on the robot's network | `http://<robot-ip>:8080` (the IP is on telemetry) |
+| Control Hub over USB | `adb reverse tcp:8080 tcp:8080`, then open `http://localhost:8080` |
+
+### Desktop simulator
+
+Windows with a JDK 11 or newer (Android Studio's bundled JDK works). No robot, no Android:
+
+```powershell
+cd desktop-sim
+powershell -ExecutionPolicy Bypass -File .\run-sim.ps1
+```
+
+The dashboard opens at http://localhost:8080 with synthetic targets that move, so every panel has something to show.
+
+To use your laptop webcam as the robot camera instead (needs Python 3.9+ with `opencv-python` and `numpy`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run-sim.ps1 -Webcam
+```
+
+Print a tag or hold a phone screen with one up to the lens. Detection runs in `webcam_tags.py`; the preview is at http://localhost:8090 and the numbers on the dashboard are live.
+
+## Dashboard
+
+| Group | What it does |
+|---|---|
+| source | Switch between the USB webcam and the Limelight while the OpMode runs |
+| camera | Webcam resolution, exposure, gain, camera name, Driver Station live view |
+| detector | Webcam decimation and pose solver. Hidden in Limelight mode, where the camera owns its own pipeline |
+| targeting | Alliance, roll limit, minimum cluster percent, minimum decision margin |
+| Limelight | Device name, host, poll rate, active pipeline, link to the camera's own page on port 5801, push tag size |
+| hive | Baseline pitch and tip threshold for the hive-cell check |
+
+The page polls 4 times a second. If a row looks stale, the footer of the page shows the loop time and detection count.
+
+## Tests
+
+```powershell
+cd FtcRobotController
+.\gradlew.bat :TeamCode:testDebugUnitTest
+```
+
+47 tests, no robot needed: config clamping and the JSON round trip, the dashboard's HTTP server, both camera sources driven through SimLoop with fake hardware, and the tag-size patcher against realistic pipeline files.
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/` | The detection code, no FTC SDK imports, the copy the desktop simulator compiles |
+| `FtcRobotController/` | The FTC SDK 12 project: the same sources under `TeamCode/`, plus the tests |
+| `desktop-sim/` | Dashboard host for a PC, plus `webcam_tags.py` (OpenCV detector that feeds it) |
+| `desktop-sim/run-sim.ps1` | Compiles the sim and starts it |
+
+To use it in your own robot project, copy the six `.java` files from either `TeamCode/` folder into `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/`. They only depend on the FTC SDK.
+
+## Ports
+
+| Port | What |
+|---|---|
+| 8080 | The dashboard |
+| 8081 | Detections posted by `webcam_tags.py` |
+| 8090 | MJPEG preview from the simulator's webcam script |
+| 5801 | The Limelight's own web page, linked from the dashboard |
+| 5807 | The Limelight's REST API, used by push tag size |
+
+Only one process can own 8080, so stop the desktop simulator before running the tests.
+
+## Troubleshooting
+
+- **Page won't open** - the laptop and robot must be on the same network; over USB use the `adb reverse` line above. Port 8080 must not be blocked on the hub.
+- **`camera 'Webcam 1' not found`** - the Driver Station camera name is different. Type the right name on the dashboard.
+- **Limelight shows nothing** - check the device name matches the Driver Station, and that the Limelight is on a pipeline with tags (`pipe_fiducial`). The dashboard prints the pipeline it is actually running.
+- **Push tag size refused** - the message names the keys it found and the value it read. Paste it into an issue and it can usually be supported in one line.
+- **Poses jitter** - lower exposure, try another pose solver, or raise decimation while keeping the smallest value that still sees the tags.
+
+## License
+
+The AprilTag code in this repo is MIT, see [LICENSE](LICENSE). The bundled `FtcRobotController/` is FIRST's SDK under its own BSD-3 license, see `FtcRobotController/LICENSE`.
