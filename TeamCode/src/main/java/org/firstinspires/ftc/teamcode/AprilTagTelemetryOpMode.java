@@ -45,6 +45,16 @@ public class AprilTagTelemetryOpMode extends OpMode {
 
     @Override
     public void loop() {
+        try {
+            loopOnce();
+        } catch (Throwable e) {
+            // Same rule as the dashboard OpMode: a detection that cannot be read must not end
+            // the run, and the reason has to reach the Driver Station.
+            telemetry.addLine("loop failed - " + e);
+        }
+    }
+
+    private void loopOnce() {
         List<AprilTagDetection> detections = aprilTag.getDetections();
 
         telemetry.addData("cam", portal.getCameraState().name());

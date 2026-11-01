@@ -108,6 +108,15 @@ class AprilTagDashboardOpModeSimTest {
         }
     }
 
+    /** A detection path broken by a class the running SDK does not have: an Error, not an Exception. */
+    private static final class MissingSdkClassProcessor extends StubProcessor {
+        @Override
+        public ArrayList<AprilTagDetection> getDetections() {
+            throw new NoClassDefFoundError(
+                    "org/firstinspires/ftc/vision/apriltag/AprilTagClusterDetection");
+        }
+    }
+
     /** The shipping OpMode with only the two Android/native pieces taken out. */
     private static final class SimOpMode extends AprilTagDashboardOpMode {
         @Override
@@ -325,5 +334,53 @@ class AprilTagDashboardOpModeSimTest {
         assertTrue(sawTag[0] > 0, "the poseless tag must be served with hasPose:false: " + body[0]);
         assertTrue(body[0].contains("\"error\":\"\""),
                 "nothing threw, so no error should be reported: " + body[0]);
+    }
+
+    /**
+     * A catch (Exception) cannot save a run from an Error - and a detection class missing from
+     * the installed SDK raises NoClassDefFoundError the first time a tag is read. That is the
+     * failure that still ended the OpMode on the field, so the guard has to be Throwable.
+     */
+    @Test
+    void anErrorFromTheDetectionPathDoesNotEndTheOpModeEither() {
+        Assumptions.assumeTrue(portFree(AprilTagDashboardServer.PORT),
+                "port " + AprilTagDashboardServer.PORT + " is in use - stop the desktop "
+                        + "dashboard (DesktopSimMain) before running these tests");
+
+        FakeHardwareMap hardwareMap = new FakeHardwareMap();
+        AprilTagDashboardOpMode opMode = new AprilTagDashboardOpMode() {
+            @Override
+            protected AprilTagProcessor createProcessor() {
+                return new MissingSdkClassProcessor();
+            }
+
+            @Override
+            protected void rebuildPortal() {
+            }
+        };
+
+        int[] lastStatus = new int[] {-1};
+        int[] okStatus = new int[] {-1};
+        String[] body = new String[1];
+
+        OpModeRunResult result = new OpModeRunner(opMode, hardwareMap)
+                .initLoopTicks(2)
+                .activeTicks(8)
+                .eachTick(dt -> {
+                    String json = fetchState(lastStatus);
+                    if (json.contains("camState")) {
+                        okStatus[0] = lastStatus[0];
+                        body[0] = json;
+                    }
+                })
+                .run();
+
+        assertTrue(result.ticks() > 0, "the run completed its ticks instead of dying");
+        assertTrue(okStatus[0] == 200, "the dashboard still answers; last status=" + okStatus[0]);
+        assertNotNull(body[0], "no state JSON was served; status=" + lastStatus[0]);
+        assertTrue(body[0].contains("NoClassDefFoundError"),
+                "the error class must be named on the dashboard: " + body[0]);
+        assertTrue(body[0].contains("AprilTagClusterDetection"),
+                "the missing class must be named too: " + body[0]);
     }
 }

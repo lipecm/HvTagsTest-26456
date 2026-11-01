@@ -102,8 +102,8 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
     public void init_loop() {
         try {
             latestState = buildStateJson();
-        } catch (Exception e) {
-            lastError = "state: " + e;
+        } catch (Throwable e) {
+            lastError = describeFailure("state", e);
         }
     }
 
@@ -111,11 +111,41 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
     public void loop() {
         try {
             loopOnce();
-        } catch (Exception e) {
-            // A webcam that dies mid-stream, or a control it refuses, must not end the run:
-            // the match keeps going with the reason on telemetry and on the dashboard.
-            lastError = "loop: " + e;
+        } catch (Throwable e) {
+            // A webcam that dies mid-stream, a control it refuses, or a missing class from a
+            // mismatched SDK must not end the run. Throwable, not Exception: NoClassDefFoundError
+            // and friends are Errors, and they are exactly what killed the OpMode on the field.
+            lastError = describeFailure("loop", e);
         }
+    }
+
+    /**
+     * "loop: java.lang.NoClassDefFoundError: ... &lt;- AprilTagTargeting.isScorable:31 &lt;- ..."
+     *
+     * <p>The class and the throw site are what identify the fault; the message alone often is
+     * not enough (an Error frequently carries none).
+     */
+    private static String describeFailure(String where, Throwable e) {
+        StringBuilder sb = new StringBuilder(where).append(": ").append(e);
+        StackTraceElement[] frames = e.getStackTrace();
+        for (int i = 0; frames != null && i < frames.length && i < 3; i++) {
+            StackTraceElement f = frames[i];
+            sb.append(" <- ").append(shortClass(f.getClassName()))
+                    .append('.').append(f.getMethodName()).append(':').append(f.getLineNumber());
+        }
+        Throwable cause = e.getCause();
+        if (cause != null && cause != e) {
+            sb.append(" (caused by ").append(cause).append(')');
+        }
+        return sb.toString();
+    }
+
+    private static String shortClass(String className) {
+        if (className == null) {
+            return "?";
+        }
+        int dot = className.lastIndexOf('.');
+        return dot < 0 ? className : className.substring(dot + 1);
     }
 
     private void loopOnce() {
@@ -145,21 +175,31 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         latestDetections = fetchDetections();
         latestState = buildStateJson();
 
-        AprilTagDetection target = AprilTagTargeting.bestTarget(latestDetections, config);
         telemetry.addData("cam", camStateText());
         telemetry.addData("fps", currentFps());
         telemetry.addData("loop ms", loopMs);
         telemetry.addData("tags seen", latestDetections.size());
-        if (target != null) {
-            telemetry.addLine("TARGET " + describe(target));
-            telemetry.addData("range (in)", String.format(Locale.US, "%.1f", target.ftcPose.range));
-            telemetry.addData("bearing (deg)", String.format(Locale.US, "%.1f", target.ftcPose.bearing));
-        } else {
-            telemetry.addLine("no scorable target - "
-                    + AprilTagTargeting.noTargetReason(latestDetections, config));
-        }
-        for (AprilTagDetection d : latestDetections) {
-            telemetry.addLine((AprilTagTargeting.isScorable(d, config) ? "[ok] " : "[  ] ") + describe(d));
+        AprilTagDetection target = null;
+        try {
+            target = AprilTagTargeting.bestTarget(latestDetections, config);
+            if (target != null) {
+                telemetry.addLine("TARGET " + describe(target));
+                telemetry.addData("range (in)",
+                        String.format(Locale.US, "%.1f", target.ftcPose.range));
+                telemetry.addData("bearing (deg)",
+                        String.format(Locale.US, "%.1f", target.ftcPose.bearing));
+            } else {
+                telemetry.addLine("no scorable target - "
+                        + AprilTagTargeting.noTargetReason(latestDetections, config));
+            }
+            for (AprilTagDetection d : latestDetections) {
+                telemetry.addLine((AprilTagTargeting.isScorable(d, config) ? "[ok] " : "[  ] ")
+                        + describe(d));
+            }
+        } catch (Throwable e) {
+            // The Driver Station readout is a nicety; it must never be what ends the run.
+            lastError = describeFailure("telemetry", e);
+            telemetry.addLine("telemetry readout failed - " + e);
         }
         if (!lastError.isEmpty()) {
             telemetry.addLine(lastError);
@@ -182,8 +222,10 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
             lastLLResult = null;
             return aprilTag == null
                     ? java.util.Collections.emptyList() : aprilTag.getDetections();
-        } catch (Exception e) {
-            lastError = "camera: " + e;
+        } catch (Throwable e) {
+            // Throwable: a tag library or bridge class missing from the running SDK surfaces as
+            // an Error the first time a detection is actually read.
+            lastError = describeFailure("camera", e);
             return java.util.Collections.emptyList();
         }
     }
@@ -666,7 +708,19 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
 
         sb.append("\"config\":").append(config.toJson()).append(',');
 
-        AprilTagDetection target = AprilTagTargeting.bestTarget(latestDetections, config);
+        AprilTagDetection target = null;
+        String targetWhy = "";
+        try {
+            target = AprilTagTargeting.bestTarget(latestDetections, config);
+            if (target == null) {
+                targetWhy = AprilTagTargeting.noTargetReason(latestDetections, config);
+            }
+        } catch (Throwable e) {
+            // Targeting reads the SDK's detection classes; keep the page alive without it.
+            lastError = describeFailure("targeting", e);
+            target = null;
+            targetWhy = "targeting failed - " + e;
+        }
         if (target == null) {
             sb.append("\"target\":null,");
         } else {
@@ -674,9 +728,7 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
             appendDetection(sb, target);
             sb.append(',');
         }
-        AprilTagConfig.field(sb, "targetWhy",
-                target == null ? AprilTagTargeting.noTargetReason(latestDetections, config) : "")
-                .append(',');
+        AprilTagConfig.field(sb, "targetWhy", targetWhy).append(',');
 
         // BIOBUZZ hive-cell tip check (see AprilTagConfig.isTipped). Uses the NEAREST cell
         // by any means - a tipped cell is the one whose tags go unscorable, so scorable-only
@@ -704,7 +756,13 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         boolean showUnscorable = config.showUnscorable;
         boolean first = true;
         for (AprilTagDetection d : latestDetections) {
-            boolean scorable = AprilTagTargeting.isScorable(d, config);
+            boolean scorable;
+            try {
+                scorable = AprilTagTargeting.isScorable(d, config);
+            } catch (Throwable e) {
+                lastError = describeFailure("scorable", e);
+                scorable = false;
+            }
             if (!scorable && !showUnscorable) {
                 continue;
             }
@@ -718,7 +776,26 @@ public class AprilTagDashboardOpMode extends OpMode implements AprilTagDashboard
         return sb.toString();
     }
 
+    /**
+     * One detection as a JSON object. A tag that cannot be described (a class missing from the
+     * running SDK, say) still gets a valid row, because a broken array would take the page down.
+     */
     private void appendDetection(StringBuilder sb, AprilTagDetection d) {
+        StringBuilder one = new StringBuilder(256);
+        try {
+            appendDetectionFields(one, d);
+            sb.append(one);
+        } catch (Throwable e) {
+            lastError = describeFailure("detection", e);
+            sb.append("{\"kind\":\"single\",\"name\":null,\"id\":-1,\"meta\":false,")
+                    .append("\"scorable\":false,\"percent\":0,\"margin\":0,\"hamming\":0,")
+                    .append("\"hasPose\":false,\"range\":null,\"bearing\":null,\"elevation\":null,")
+                    .append("\"x\":null,\"y\":null,\"z\":null,\"pitch\":null,\"roll\":null,")
+                    .append("\"yaw\":null}");
+        }
+    }
+
+    private void appendDetectionFields(StringBuilder sb, AprilTagDetection d) {
         boolean cluster = d instanceof AprilTagClusterDetection;
         boolean single = d instanceof AprilTagSingleDetection;
         String name = null;
